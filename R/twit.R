@@ -48,8 +48,8 @@ ingest.tweets.corpus <- function(dir) {
   return(corpus)
 }
 
-system.time(
-  tokens <- lapply(corpus$tweet, function(tweet) {
-    return(unlist(strsplit(tweet, "\\W+")))
-  })
-)
+# system.time(
+#   tokens <- lapply(corpus$tweet, function(tweet) {
+#     return(unlist(strsplit(tweet, "\\W+")))
+#   })
+# )

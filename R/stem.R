@@ -2,56 +2,33 @@ source(file.path("R", "common.R"))
 
 build.stem.cache <- function(file) {
   cat("Loading stems dictionary\n")
-  stems <- read.csv(file, 
-                    col.names=c("form", "pos", "stem"),
-                    colClasses=c("character", "NULL", "character"),
-                    header=F)
-  stems <- data.table(stems)
+  stems <- fread(file, header=F, select=c(1,3))
+  setnames(stems, 1:2, c("form", "feat"))
   
   cat("Standardizing orthography\n")
-  stems$form <- standardize(stems$form)
-  stems$stem <- standardize(stems$stem)
-
-  cat("Removing duplicates\n")
-  setkey(stems, form, stem)
+  stems[,form:=standardize(form),]
+  stems[,feat:=standardize(feat),]
+  
+  cat("Removing NAs, duplicates\n")
+  setkey(stems, form, feat)
   stems <- unique(stems)
   stems <- na.omit(stems)
-  stems <- stems[form != ""]
+  stems <- stems[! ""]
   
-  return(stems)
+  cat("Initializing hash\n")
+  nstems <- length(unique(stems$feat))
+  index <- new.env(hash=T, size=nstems)
+  pb <- txtProgressBar(min=1, max=nstems, style=3)
+  
+  cat("Populating hash\n")
+  foo <- function(form, feat) {
+    assign(form, c(feat), envir=index)
+    setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
+  }
+  stems[, foo(form, feat), by=form]
+  
+  close(pb)
+  return(index)
 }
 
 stems <- build.stem.cache(file.path("data", "la.lexicon.csv"))
-
-add.col.stem <- function(x) {
-  ids <- which(x$type=="W")
-  pb <- txtProgressBar(min=1, max=max(ids), style=3)
-  
-  do.call(rbind,
-    lapply(ids, function(id) {
-      setTxtProgressBar(pb, id)
-      form.this <- x[id, form]
-      
-      do.call(rbind,
-        lapply(stems[form==form.this, stem], function(stem) {
-          data.frame(id=id, stem=stem, stringsAsFactors=F)
-        })
-      )
-    })
-  )
-}
-
-build.stem.cache2 <- function(stems) {
-  forms <- unique(stems$form)
-  
-  estem <- new.env(hash=T, size=length(forms))
-  
-  
-}
-
-
-
-
-add.col.stem.two <- function(index.form) {
-  
-}

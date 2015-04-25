@@ -25,6 +25,7 @@ parse.phrase <- function(text, phraseid, unitid) {
   
   data.table(
     display = tokens[not.empty],
+    form = standardize(tokens[not.empty]),
     type = types[not.empty],
     unitid = rep(unitid, sum(not.empty)),
     phraseid = rep(phraseid, sum(not.empty))
@@ -73,7 +74,7 @@ ingest.text <- function(file) {
 
 add.column <- function(index) {
   wtok <- which(index$type=="W")
-  wtok <- data.frame(id=wtok, tok=standardize(index[wtok, display]), stringsAsFactors=F)
+  wtok <- data.frame(id=wtok, tok=index[wtok, form], stringsAsFactors=F)
   wtok <- wtok[grepl("[a-z]", wtok$tok),]
   utok <- unique(wtok$tok)
   hash <- new.env(hash=T, size=length(utok))
@@ -89,26 +90,79 @@ add.column <- function(index) {
   return(hash)
 }
 
-links <- function(s, t) {
-  rbindlist(
-    lapply(intersect(ls(s), ls(t)), function(tok) {
-      expand.grid(s=get(tok, envir=s), t=get(tok, envir=t), tok=tok)
-    })
-  )
+feat <- function(form, feature) {
+  return(unlist(mget(x=form, envir=feature, ifnotfound=form)))
 }
 
-feature.frequencies <- function(feature) {
-  freq <- new.env(hash=T, size=length(ls(feature)))
+add.col.feature <- function(index.token, dict.feature) {
+  forms <- ls(index.token)
+  index.feature <- new.env(hash=T, size=length(forms))
+  
+  cat("Stemming", length(forms), "forms\n")
+  pb <- txtProgressBar(min=1, max=length(forms), style=3)
+  
+  for (f in forms) {
+    indexable <- feat(f, feature=dict.feature)
+    tokids.form <- get(f, index.token)
+    
+    for (i in indexable) {
+      tokids.feature <- unlist(mget(i, envir=index.feature, mode="integer", ifnotfound=list(integer(0))))
+      
+      assign(i, value=c(tokids.feature, tokids.form), envir=index.feature)
+    }
+    setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
+  }
+  close(pb)
+  
+  cat("Removing duplicate entries\n")
+  pb <- txtProgressBar(min=1, max=length(ls(index.feature)), style=3)
+  
+  for (i in ls(index.feature)) {
+    assign(i, value=unique(get(i, index.feature)), envir=index.feature)
+    setTxtProgressBar(pb, getTxtProgressBar(pb)+1) 
+  }
+  close(pb)
+  
+  return(index.feature)
+}
+
+links <- function(s, t, stoplist=character(0)) {
+  features <- setdiff(intersect(ls(s), ls(t)), stoplist)
+  pb <- txtProgressBar(min=1, max=length(features), style=3)
+  
+  links <- rbindlist(
+    lapply(features, function(f) {
+      setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
+      expand.grid(s=get(f, envir=s), t=get(f, envir=t), f=f)
+    })
+  )
+  
+  close(pb)
+  return(links)
+}
+
+feature.frequencies <- function(index.feature) {
+  features <- ls(index.feature)
+  freq <- new.env(hash=T, size=length(features))
   total <- 0
   
-  for (f in ls(feature)) {
-    tally <- length(get(f, envir=feature))
+  cat ("Calculating", length(features), "feature tallies\n")
+  pb <- txtProgressBar(min=1, max=length(features), style=3)
+  for (f in features) {
+    tally <- length(get(f, envir=index.feature))
     assign(f, tally, envir=freq)
     total <- total + tally
+    setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
   }
-  for (f in ls(feature)) {
+  close(pb)
+  
+  cat ("Converting to frequencies\n")
+  pb <- txtProgressBar(min=1, max=length(features), style=3)
+  for (f in features) {
     assign(f, get(f, envir=freq)/total, envir=freq)
+    setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
   }
+  close(pb)
 
   assign(".__TOTAL__", total, envir=freq)
   
@@ -143,28 +197,3 @@ feature.stoplist <- function(freq.list, n=10) {
   return(stoplist)
 }
 
-mytest <- function() {
-  s.text <- ingest.text("tesscorpus/vergil.aeneid.xml")
-  t.text <- ingest.text("tesscorpus/lucan.bellum_civile.xml")
-  
-  s.word <- add.column(s.text)
-  t.word <- add.column(t.text)
-  
-  s.freq <- feature.frequencies(s.word)
-  t.freq <- feature.frequencies(t.word)
-  
-  stoplist <- feature.stoplist(list(s.freq, t.freq))
-  
-  rm(list=intersect(stoplist, ls(s.word)), envir=s.word)
-  rm(list=intersect(stoplist, ls(t.word)), envir=t.word)
-
-  result <- links(s.word, t.word)
-  result <- cbind(result,unit_s=s.text[result$s, unitid], unit_t=t.text[result$t, unitid])
-  setkey(result, tok, unit_s, unit_t)
-  
-  dup <- duplicated(result)
-  m <- result[! dup, list(unit_s, unit_t)]
-  m <- table(m)
-  m <- as.data.table(m)
-  m <- m[N>1,]
-}
