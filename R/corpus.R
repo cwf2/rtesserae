@@ -83,7 +83,7 @@ ingest.text <- function(file) {
   
   token.table$type = as.factor(token.table$type)
   
-  setkey(token.table, unitid, phraseid)
+  setkey(token.table, tokenid)
   
   assign("tokens", token.table, envir=text.object)
   return(text.object)
@@ -100,7 +100,8 @@ add.column <- function(text) {
   
   text$tokens[type=="W", f(form, tokenid), by=form, ]
   
-  return(text)
+  # calculate frequencies
+  assign("freq.form", feature.frequencies(text$index.form), envir=text)
 }
 
 feat <- function(form, feature) {
@@ -138,22 +139,8 @@ add.col.feature <- function(text, feat.name, feat.dict) {
   }
   close(pb)
   
-  return(text)
-}
-
-links <- function(s, t, stoplist=character(0)) {
-  features <- setdiff(intersect(ls(s), ls(t)), stoplist)
-  pb <- txtProgressBar(min=1, max=length(features), style=3)
-  
-  links <- rbindlist(
-    lapply(features, function(f) {
-      setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
-      expand.grid(s.tokenid=get(f, envir=s), t.tokenid=get(f, envir=t), feature=f)
-    })
-  )
-  
-  close(pb)
-  return(links)
+  # frequencies
+  assign(paste("freq", feat.name, sep="."), feature.frequencies(index.feature), envir=text)
 }
 
 feature.frequencies <- function(index.feature) {
@@ -213,55 +200,65 @@ feature.stoplist <- function(freq.list, n=10) {
 }
 
 tess.search <- function(s.text, t.text, feat.name="form") {
-  cat("Calculating feature frequencies\n")
+  cat("Source:", s.text$file, "\n")
+  cat("Target:", t.text$file, "\n")
+  cat("Feature:", feat.name, "\n")
   
   s.feat <- get(paste("index", feat.name, sep="."), envir=s.text)
   t.feat <- get(paste("index", feat.name, sep="."), envir=t.text)
   
-  s.freq <- feature.frequencies(s.feat)
-  t.freq <- feature.frequencies(t.feat)
+  s.freq <- get(paste("freq", feat.name, sep="."), envir=s.text)
+  t.freq <- get(paste("freq", feat.name, sep="."), envir=t.text)
   
   stoplist <- feature.stoplist(list(s.freq, t.freq))
   cat("Stoplist:", paste(stoplist, collapse=" "), "\n")
   
+  features <- setdiff(intersect(ls(s.feat), ls(t.feat)), stoplist)
+  
   cat("Generating links\n")
-  result <- links(s.feat, t.feat, stoplist)
+  pb <- txtProgressBar(min=1, max=length(features), style=3)
+  result <- rbindlist(
+    lapply(features, function(feature) {
+      setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
+      expand.grid(
+        s.tokenid=get(feature, envir=s.feat), 
+        t.tokenid=get(feature, envir=t.feat), 
+        feature=feature
+      )
+    })
+  )
+  close(pb)
   result <- cbind(result,
     s.unitid=s.text$tokens[result$s.tokenid, unitid], 
     t.unitid=t.text$tokens[result$t.tokenid, unitid]
   )
-  
-  check.n.forms <- function(s.tokenid, t.tokenid) {
-    forms <- unique(unlist(c(s.text$tokens[s.tokenid, form], t.text$tokens[t.tokenid, form])))
-    length(forms)
-  }
-  
+    
   cat ("Checking minimal match criteria:\n")
   # for each pair of phrases, make sure at least two source tokens
-  cat (" [1/4] at least 2 source tokens\n")
+  cat (" [1/3] at least 2 source tokens\n")
   setkey(result, s.unitid, t.unitid, s.tokenid)
   m <- result[! duplicated(result), .N, by=.(s.unitid, t.unitid)]
   m <- m[N>1, .(s.unitid, t.unitid)]
   result <- result[m]
   
   # make sure at least two target tokens
-  cat (" [2/4] at least 2 target tokens\n")
+  cat (" [2/3] at least 2 target tokens\n")
   setkey(result, s.unitid, t.unitid, t.tokenid)
   m <- result[! duplicated(result), .N, by=.(s.unitid, t.unitid)]
   m <- m[N>1, .(s.unitid, t.unitid)]
   result <- result[m]
   
   # make sure at least 2 features
-  cat (" [3/4] at least 2 features\n")
+  cat (" [3/3] at least 2 features\n")
   setkey(result, s.unitid, t.unitid, feature)
   m <- result[! duplicated(result), .N, by=.(s.unitid, t.unitid)]
   m <- m[N>1, .(s.unitid, t.unitid)]
   result <- result[m]
   
-  # make sure at least two differently inflected forms
-  #  cat (" [4/4] at least 2 forms\n")
-  #  result <- result[result[,check.n.forms(s,t), by=.(unit_s, unit_t)][V1>1], .(s, t, f, unit_s, unit_t)]
-  
+  # scoring
+  dist <- function(s.tokenid, t.tokenid) {
+    
+  }
   return(result)
 }
 
