@@ -1,5 +1,14 @@
-source(file.path("R", "common.R"))
 library("XML")
+library("stringi")
+library("data.table")
+
+standardize <- function(s) {
+  s <- stri_trans_nfkd(s)
+  s <- stri_trans_tolower(s)
+  s <- gsub("[^[:alpha:]]+", "", s)
+  s <- chartr("jv", "iu", s)
+  return(s)
+}
 
 tesre <- new.env()
 tesre$nonword <- "\\W+"
@@ -107,6 +116,9 @@ add.column <- function(text) {
 feat <- function(form, feature) {
   return(unlist(mget(x=form, envir=feature, ifnotfound=form)))
 }
+freq <- Vectorize(function(form, freq) {
+  return(get(form, envir=freq))
+}, vectorize.args="form")
 
 add.col.feature <- function(text, feat.name, feat.dict) {
   forms <- ls(text$index.form)
@@ -199,6 +211,35 @@ feature.stoplist <- function(freq.list, n=10) {
   return(stoplist)
 }
 
+score <- function(s.tokenid, t.tokenid, s.text, t.text, pb=NA) {
+  
+  s.match <- data.table(tokenid=unique(s.tokenid))
+  t.match <- data.table(tokenid=unique(t.tokenid))
+  
+  s.match[,freq:=freq(s.text$tokens[tokenid, form], s.text$freq.form)]
+  t.match[,freq:=freq(t.text$tokens[tokenid, form], t.text$freq.form)]
+  
+  setkey(s.match, freq, tokenid)
+  setkey(t.match, freq, tokenid)
+  
+  s.endpoints <- sort(s.match[1:2, tokenid])
+  t.endpoints <- sort(t.match[1:2, tokenid])
+  
+  s.dist <- sum(s.text$tokens[tokenid >= s.endpoints[1] & tokenid <= s.endpoints[2], type]=="W")
+  t.dist <- sum(t.text$tokens[tokenid >= t.endpoints[1] & tokenid <= t.endpoints[2], type]=="W")
+  
+  s.invfreq <- sum(s.match[,1/freq])
+  t.invfreq <- sum(t.match[,1/freq])
+  
+  score <- log((s.invfreq + t.invfreq)/(s.dist + t.dist))
+    
+  if (class(pb) == "txtProgressBar") {
+    setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
+  }
+  
+  return(score)
+}
+
 tess.search <- function(s.text, t.text, feat.name="form") {
   cat("Source:", s.text$file, "\n")
   cat("Target:", t.text$file, "\n")
@@ -254,11 +295,38 @@ tess.search <- function(s.text, t.text, feat.name="form") {
   m <- result[! duplicated(result), .N, by=.(s.unitid, t.unitid)]
   m <- m[N>1, .(s.unitid, t.unitid)]
   result <- result[m]
-  
-  # scoring
-  dist <- function(s.tokenid, t.tokenid) {
-    
-  }
+
   return(result)
+}
+
+build.stem.cache <- function(file) {
+  cat("Loading stems dictionary\n")
+  stems <- fread(file, header=F, select=c(1,3))
+  setnames(stems, 1:2, c("form", "feat"))
+  
+  cat("Standardizing orthography\n")
+  stems[,form:=standardize(form),]
+  stems[,feat:=standardize(feat),]
+  
+  cat("Removing NAs, duplicates\n")
+  setkey(stems, form, feat)
+  stems <- unique(stems)
+  stems <- na.omit(stems)
+  stems <- stems[! ""]
+  
+  cat("Initializing hash\n")
+  nstems <- length(unique(stems$feat))
+  index <- new.env(hash=T, size=nstems)
+  pb <- txtProgressBar(min=1, max=nstems, style=3)
+  
+  cat("Populating hash\n")
+  foo <- function(form, feat) {
+    assign(form, c(feat), envir=index)
+    setTxtProgressBar(pb, getTxtProgressBar(pb)+1)
+  }
+  stems[, foo(form, feat), by=form]
+  
+  close(pb)
+  return(index)
 }
 
